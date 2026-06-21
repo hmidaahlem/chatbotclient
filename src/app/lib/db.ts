@@ -1,18 +1,18 @@
 import mysql from 'mysql2/promise';
 
-const useSSL = process.env.DB_SSL === 'true' || 
-               (process.env.DB_HOST && process.env.DB_HOST.includes('tidbcloud.com'));
+const isSSLRequired = process.env.DB_SSL === 'true' || 
+                      (process.env.DB_HOST && process.env.DB_HOST.includes('tidbcloud.com'));
 
+// 🔗 Construction de l'URI de connexion
+const sslParam = isSSLRequired ? '?ssl={"rejectUnauthorized":true}' : '';
+const connectionString = `mysql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}${sslParam}`;
+
+// 🚀 Création du pool via l'URI directe
 const pool = mysql.createPool({
-  host: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT || '3306'),
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+  uri: connectionString,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  ssl: useSSL ? { rejectUnauthorized: true } : undefined,
 });
 
 export default pool;
