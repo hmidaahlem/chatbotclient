@@ -14,8 +14,7 @@ const pool: Pool = mysql.createPool({
   port: parseInt(process.env.DB_PORT || '3306', 10),
   
   // 🔐 Configuration SSL/TLS (optionnel pour TiDB)
-  ssl: isSSLRequired ? 'require' : undefined,
-  
+ssl: isSSLRequired ? { minVersion: 'TLSv1.2', rejectUnauthorized: true } : undefined,  
   // ⚙️ Options de pool
   waitForConnections: true,
   connectionLimit: 10,
