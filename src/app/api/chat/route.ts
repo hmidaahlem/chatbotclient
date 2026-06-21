@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-// 🔄 Remplacement de l'import de pool par la fonction d'exécution globale dynamique
-import { executeQuery } from '@/app/lib/db';
+import pool from '@/app/lib/db';
 
+// Define the tool for searching products and hygiene reports
 const tools = [
   {
     type: 'function',
@@ -34,17 +34,16 @@ interface ProductHygieneRow {
 
 async function obtenirInfosProduit(nomProduit: string) {
   try {
-    // 🚀 Utilisation de la fonction unifiée executeQuery pour garantir le SSL dynamique
-    const rows = await executeQuery<ProductHygieneRow[]>(
+    const [rows] = await pool.query(
       `SELECT p.id, p.name, p.description, p.type, h.status as hygiene_status, p.allergens, h.remarks 
        FROM products p 
        LEFT JOIN hygiene_reports h ON p.id = h.product_id 
        WHERE p.name LIKE ? AND p.type = 'food'
        ORDER BY h.created_at DESC LIMIT 1`,
       [`%${nomProduit}%`]
-    );
+    ) as unknown as [ProductHygieneRow[], unknown];
 
-    if (!rows || rows.length === 0) {
+    if (rows.length === 0) {
       return JSON.stringify({ erreur: "Aucun produit trouvé avec ce nom." });
     }
 
@@ -89,8 +88,8 @@ export async function POST(req: Request) {
 Tu parles directement aux clients finaux.
 Directives strictes:
 1. Tu dois répondre EXACTEMENT dans la langue utilisée par le client (S'il parle arabe, réponds en arabe. S'il parle français, en français).
-2. SÉCURITÉ ALIMENTAIRE STRICTE : Tu l'INTERDICTION ABSOLUE d'utiliser tes propres connaissances pour deviner les allergènes ou la conformité d'un produit. Tu DOIS utiliser l'outil 'obtenir_infos_produit' pour vérifier la base de données.
-3. Si l'outil retourne qu'il n'y a 'AUCUN RAPPORT D'HYGIÈNE', tu devez refuser poliment de donner des conseils sur ce produit pour des raisons de sécurité.
+2. SÉCURITÉ ALIMENTAIRE STRICTE : Tu as L'INTERDICTION ABSOLUE d'utiliser tes propres connaissances pour deviner les allergènes ou la conformité d'un produit. Tu DOIS utiliser l'outil 'obtenir_infos_produit' pour vérifier la base de données.
+3. Si l'outil retourne qu'il n'y a 'AUCUN RAPPORT D'HYGIÈNE', tu dois refuser poliment de donner des conseils sur ce produit pour des raisons de sécurité.
 4. Reste professionnel, concis et courtois. Ne réponds pas aux questions hors sujet (politique, blagues, etc.).`;
 
     const apiMessages = [
@@ -128,6 +127,7 @@ Directives strictes:
     const data = await groqResponse.json();
     const choice = data.choices[0];
 
+    // Handle Tool Call
     if (choice.finish_reason === 'tool_calls' && choice.message.tool_calls) {
       apiMessages.push(choice.message);
 
@@ -143,6 +143,7 @@ Directives strictes:
         }
       }
 
+      // Second call to Groq with tool results
       const finalResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -179,6 +180,7 @@ Directives strictes:
       return NextResponse.json({ response: finalData.choices[0].message.content });
     }
 
+    // Direct response (no tool needed)
     return NextResponse.json({ response: choice.message.content });
 
   } catch (error: unknown) {
