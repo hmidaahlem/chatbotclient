@@ -22,16 +22,26 @@ const tools = [
   },
 ];
 
+interface ProductHygieneRow {
+  id: number;
+  name: string;
+  description: string;
+  type: string;
+  hygiene_status: string | null;
+  allergens: string | null;
+  remarks: string | null;
+}
+
 async function obtenirInfosProduit(nomProduit: string) {
   try {
-    const [rows]: any = await pool.query(
+    const [rows] = await pool.query(
       `SELECT p.id, p.name, p.description, p.type, h.status as hygiene_status, p.allergens, h.remarks 
        FROM products p 
        LEFT JOIN hygiene_reports h ON p.id = h.product_id 
        WHERE p.name LIKE ? AND p.type = 'food'
        ORDER BY h.created_at DESC LIMIT 1`,
       [`%${nomProduit}%`]
-    );
+    ) as unknown as [ProductHygieneRow[], unknown];
 
     if (rows.length === 0) {
       return JSON.stringify({ erreur: "Aucun produit trouvé avec ce nom." });
@@ -53,14 +63,25 @@ async function obtenirInfosProduit(nomProduit: string) {
       allergenes_declares: p.allergens,
       remarques_sante: p.remarks,
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("DB Error:", error);
-    return JSON.stringify({ erreur: "Erreur de connexion à la base de données." });
+    const errMessage = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ 
+      erreur: "Erreur de connexion à la base de données.",
+      details: errMessage
+    });
   }
 }
 
 export async function POST(req: Request) {
   try {
+    if (!process.env.GROQ_API_KEY) {
+      return NextResponse.json({ 
+        error: 'Configuration Error',
+        details: 'GROQ_API_KEY is not defined in the environment variables on Vercel/local.'
+      }, { status: 500 });
+    }
+
     const { message, messages: history = [] } = await req.json();
 
     const systemRole = `Tu es l'assistant clientèle virtuel officiel d'AeroServe, accessible via QR Code sur les tables.
@@ -76,9 +97,8 @@ Directives strictes:
       ...history,
       { role: 'user', content: message },
     ];
-console.log("GROQ KEY EXISTS:", !!process.env.GROQ_API_KEY);
+
     const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
@@ -97,7 +117,11 @@ console.log("GROQ KEY EXISTS:", !!process.env.GROQ_API_KEY);
     if (!groqResponse.ok) {
       const err = await groqResponse.text();
       console.error("Groq Error:", err);
-      return NextResponse.json({ error: 'Failed to communicate with AI provider' }, { status: 500 });
+      return NextResponse.json({ 
+        error: 'Failed to communicate with AI provider',
+        details: err,
+        status: groqResponse.status
+      }, { status: 500 });
     }
 
     const data = await groqResponse.json();
@@ -134,15 +158,37 @@ console.log("GROQ KEY EXISTS:", !!process.env.GROQ_API_KEY);
         }),
       });
 
+      if (!finalResponse.ok) {
+        const err = await finalResponse.text();
+        console.error("Groq Final Error:", err);
+        return NextResponse.json({ 
+          error: 'Failed to communicate with AI provider during tool response',
+          details: err,
+          status: finalResponse.status
+        }, { status: 500 });
+      }
+
       const finalData = await finalResponse.json();
+      
+      if (!finalData.choices || !finalData.choices[0] || !finalData.choices[0].message) {
+        return NextResponse.json({ 
+          error: 'AI Provider returned invalid response structure',
+          details: JSON.stringify(finalData)
+        }, { status: 500 });
+      }
+
       return NextResponse.json({ response: finalData.choices[0].message.content });
     }
 
     // Direct response (no tool needed)
     return NextResponse.json({ response: choice.message.content });
 
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("API Error:", error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    const errMessage = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ 
+      error: 'Internal server error',
+      details: errMessage
+    }, { status: 500 });
   }
 }

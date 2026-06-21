@@ -49,16 +49,21 @@ export default function ChatbotClient() {
 
       const data = await res.json();
       
-      if (data.response) {
+      if (res.ok && data.response) {
         setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
       } else {
-        throw new Error('No response');
+        const detailStr = data.details ? `\n\n📌 Détails techniques : ${data.error} - ${data.details}` : '';
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: `Désolé, une erreur de connexion est survenue. (عذراً، حدث خطأ في الاتصال).${detailStr}` 
+        }]);
       }
-    } catch (error) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (error: any) {
       console.error(error);
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: "Désolé, une erreur de connexion est survenue. (عذراً، حدث خطأ في الاتصال)." 
+        content: `Désolé, une erreur de connexion est survenue. (عذراً، حدث خطأ في الاتصال).\n\n📌 Erreur : ${error.message || String(error)}` 
       }]);
     } finally {
       setIsLoading(false);
