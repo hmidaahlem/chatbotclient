@@ -27,19 +27,23 @@ interface ProductHygieneRow {
   name: string;
   description: string;
   type: string;
+  expiration_date: string | null;
   hygiene_status: string | null;
   allergens: string | null;
   remarks: string | null;
+  allergens_verified: boolean | null;
+  expiration_verified: boolean | null;
 }
 
 async function obtenirInfosProduit(nomProduit: string) {
   try {
     const [rows] = await pool.query(
-      `SELECT p.id, p.name, p.description, p.type, h.status as hygiene_status, p.allergens, h.remarks 
+      `SELECT p.id, p.name, p.description, p.type, p.expiration_date, p.allergens, 
+              h.status as hygiene_status, h.remarks, h.allergens_verified, h.expiration_verified
        FROM products p 
        LEFT JOIN hygiene_reports h ON p.id = h.product_id 
        WHERE p.name LIKE ? AND p.type = 'food'
-       ORDER BY h.created_at DESC LIMIT 1`,
+       ORDER BY LENGTH(p.name) DESC, h.created_at DESC LIMIT 1`,
       [`%${nomProduit}%`]
     ) as unknown as [ProductHygieneRow[], unknown];
 
@@ -48,19 +52,61 @@ async function obtenirInfosProduit(nomProduit: string) {
     }
 
     const p = rows[0];
+
+    // Fetch ingredients
+    const [ingRows] = await pool.query(
+      `SELECT p2.name, pr.quantity, pr.unit 
+       FROM product_recipe pr
+       JOIN products p2 ON p2.id = pr.ingredient_id
+       WHERE pr.food_product_id = ?`,
+      [p.id]
+    ) as unknown as [{name: string, quantity: number, unit: string}[], unknown];
+
+    let ingredientsList = "";
+    if (ingRows.length > 0) {
+      ingredientsList = ingRows.map(i => `- ${i.name} (${i.quantity} ${i.unit || 'piece'})`).join("\n");
+    } else {
+      ingredientsList = p.description ? p.description.trim() : "";
+    }
+
+    // 1. NON CONFORME Guardrail
+    if (p.hygiene_status === 'non_conforme') {
+      return JSON.stringify({
+        strict_response: true,
+        message: `Désolé, ce produit (${p.name}) est marqué comme NON CONFORME par le responsable d'hygiène. Pour des raisons de sécurité alimentaire, aucune information ne peut être fournie.`
+      });
+    }
+
+    const hasData = ingredientsList.length > 0 || !!p.hygiene_status || !!p.allergens || !!p.expiration_date;
+
+    // 2. DATA MISSING Guardrail (Radical pre-Groq bypass for empty data)
+    // We bypass the AI entirely so it doesn't hallucinate ingredients when none exist.
+    if (!hasData) {
+      return JSON.stringify({
+        strict_response: true,
+        message: `Aucune donnée (ingrédients, allergènes, DLC, rapport d'hygiène) n'a encore été enregistrée pour le produit "${p.name}" dans le système. Veuillez contacter le Chef Cuisine pour enregistrer la recette, et le responsable Hygiène pour les rapports sanitaires.`
+      });
+    }
+
     if (!p.hygiene_status) {
       return JSON.stringify({
         produit: p.name,
+        ingredients: ingredientsList || "Aucun ingrédient spécifié.",
+        dlc: p.expiration_date || "Non spécifiée",
+        allergenes_declares: p.allergens || "Aucun",
         alerte: "AUCUN RAPPORT D'HYGIÈNE",
-        message: "Désolé, aucun rapport officiel d'hygiène ou de conformité n'a été enregistré pour ce produit. Par sécurité, aucun conseil ne peut être donné.",
+        message: "Désolé, aucun rapport officiel d'hygiène ou de conformité n'a été enregistré pour ce produit. Par sécurité, la conformité ne peut être confirmée.",
       });
     }
 
     return JSON.stringify({
       produit: p.name,
-      description: p.description,
+      ingredients: ingredientsList || "Aucun ingrédient spécifié.",
+      dlc: p.expiration_date || "Non spécifiée",
       statut_hygiene: p.hygiene_status,
-      allergenes_declares: p.allergens,
+      allergenes_verifies: p.allergens_verified ? 'Oui' : 'Non',
+      dlc_verifiee: p.expiration_verified ? 'Oui' : 'Non',
+      allergenes_declares: p.allergens || "Aucun",
       remarques_sante: p.remarks,
     });
   } catch (error: unknown) {
@@ -87,10 +133,10 @@ export async function POST(req: Request) {
     const systemRole = `Tu es l'assistant clientèle virtuel officiel d'AeroServe, accessible via QR Code sur les tables.
 Tu parles directement aux clients finaux.
 Directives strictes:
-1. Tu dois répondre EXACTEMENT dans la langue utilisée par le client (S'il parle arabe, réponds en arabe. S'il parle français, en français).
-2. SÉCURITÉ ALIMENTAIRE STRICTE : Tu as L'INTERDICTION ABSOLUE d'utiliser tes propres connaissances pour deviner les allergènes ou la conformité d'un produit. Tu DOIS utiliser l'outil 'obtenir_infos_produit' pour vérifier la base de données.
-3. Si l'outil retourne qu'il n'y a 'AUCUN RAPPORT D'HYGIÈNE', tu dois refuser poliment de donner des conseils sur ce produit pour des raisons de sécurité.
-4. Reste professionnel, concis et courtois. Ne réponds pas aux questions hors sujet (politique, blagues, etc.).`;
+1. Tu dois répondre EXACTEMENT dans la langue utilisée par le client.
+2. SÉCURITÉ ALIMENTAIRE STRICTE : Tu as L'INTERDICTION ABSOLUE d'utiliser tes propres connaissances pour deviner les allergènes, ingrédients ou la conformité d'un produit. Tu DOIS utiliser l'outil 'obtenir_infos_produit'.
+3. Si l'outil retourne qu'il n'y a 'AUCUN RAPPORT D'HYGIÈNE', tu dois l'indiquer et refuser poliment de confirmer la conformité ou la sécurité du produit.
+4. Reste professionnel, concis et courtois. Ne réponds pas aux questions hors sujet.`;
 
     const apiMessages = [
       { role: 'system', content: systemRole },
@@ -135,6 +181,16 @@ Directives strictes:
         if (toolCall.function.name === 'obtenir_infos_produit') {
           const args = JSON.parse(toolCall.function.arguments);
           const toolResult = await obtenirInfosProduit(args.nom_produit);
+          
+          try {
+            const parsedResult = JSON.parse(toolResult);
+            if (parsedResult.strict_response) {
+              return NextResponse.json({ response: parsedResult.message });
+            }
+          } catch (e) {
+            // Not JSON or another issue, ignore and continue to Groq
+          }
+
           apiMessages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
