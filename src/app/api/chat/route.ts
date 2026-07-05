@@ -153,7 +153,7 @@ Directives strictes:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
+        model: 'llama-3.3-70b-versatile',
         messages: apiMessages,
         tools: tools,
         tool_choice: 'auto',
@@ -209,7 +209,7 @@ Directives strictes:
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
+          model: 'llama-3.3-70b-versatile',
           messages: apiMessages,
           temperature: 0.1,
           max_tokens: 800,
