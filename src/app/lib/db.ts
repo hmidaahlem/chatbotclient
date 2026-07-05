@@ -9,8 +9,7 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  // ❌ On supprime complètement la propriété 'ssl' pour ton environnement local avec Pinggy
-  // TypeScript ne râlera plus car on ne lui passe plus de valeur 'false' non autorisée
+
 });
 
 export default pool;

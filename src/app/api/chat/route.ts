@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+//connexion vers MySQL
 import pool from '@/app/lib/db';
 
 // Define the tool for searching products and hygiene reports
@@ -13,7 +14,7 @@ const tools = [
         properties: {
           nom_produit: {
             type: 'string',
-            description: "Le nom ou une partie du nom du produit (ex: 'sandwich', 'poulet')",
+            description: "Le nom ou une partie du nom du produit ",
           },
         },
         required: ['nom_produit'],
